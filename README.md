@@ -1,5 +1,9 @@
 # Goni PDF 가상 프린터
 
+[![Release](https://img.shields.io/github/v/release/turbobit/goni-virtual-printer)](https://github.com/turbobit/goni-virtual-printer/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6)
+
 모든 Windows 프로그램에서 **"Goni PDF"** 프린터로 인쇄하면, 열기 암호·권한 암호·인쇄/편집/복사 제한이 걸린 PDF로 저장합니다.
 마지막으로 사용한 설정(암호 포함, 선택 시)을 기억합니다.
 
@@ -42,7 +46,10 @@
 
 ## 설치 (배포용 설치 프로그램)
 
-`bin\GoniPdfPrinterSetup-1.0.0.exe`를 실행하면 설치 마법사가 진행됩니다 (관리자 권한 필요).
+[Releases](https://github.com/turbobit/goni-virtual-printer/releases/latest)에서 `GoniPdfPrinterSetup-<버전>.exe`를 내려받아 실행하면 설치 마법사가 진행됩니다 (관리자 권한 필요).
+직접 빌드한 경우 설치 파일은 `bin\` 폴더에 생성됩니다.
+
+> 코드 서명이 되어 있지 않아 Windows SmartScreen 경고가 표시될 수 있습니다. *추가 정보 → 실행*을 선택하세요.
 
 - 프로그램 복사, `Goni PDF` 프린터·포트 등록, 로그온 시 자동 실행, 시작 메뉴 바로가기 생성
 - 제어판 **앱 및 기능**에서 제거 가능 (프린터·포트도 함께 제거, 사용자 설정은 유지)
@@ -132,3 +139,7 @@ PyMuPDF(`pip install pymupdf`)로 AES-256/128, 한글 암호, 권한 비트, 객
 | `installer/printer.ps1` | 프린터·포트 등록/제거 (설치 프로그램에서 호출) |
 | `tools/screenshots.ps1` | README 스크린샷 생성 |
 | `tests/verify_encryption.py` | 암호화 결과 검증 |
+
+## 라이선스
+
+[MIT](LICENSE)
