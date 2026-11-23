@@ -1,5 +1,5 @@
 ﻿# Goni PDF 가상 프린터 빌드 (.NET Framework 4.x 내장 C# 컴파일러 사용 - 추가 설치 불필요)
-param([string]$Version = '1.0.0')
+param([string]$Version = '1.1.0')
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $out  = Join-Path $root 'bin'
