@@ -45,7 +45,8 @@
 | 파일 | 역할 |
 |---|---|
 | `src/Program.cs` | 진입점(명령줄 분기), 단일 인스턴스 뮤텍스, `TrayApp`, `PipeListener`, 아이콘 |
-| `src/SecurityForm.cs` | 보안 설정 창(작업 모드/설정 모드), 파일명 생성 `FileNames` |
+| `src/SecurityForm.cs` | 설정 창(작업 모드/설정 모드, 보안·저장 설정·기타 옵션 탭, 암호 없이 저장) |
+| `src/FileNaming.cs` | 파일 이름 형식 전개, 제목 정리, 파일명·폴더 검증, 중복 처리, 원자적 저장 |
 | `src/AppSettings.cs` | `settings.ini` 읽기·쓰기, DPAPI 암호 보호 |
 | `src/PdfModel.cs` | PDF 객체 모델, 렉서/파서, 교차참조 해석, 손상 파일 복구 |
 | `src/PdfSecurity.cs` | 권한 옵션, `/P` 계산, AES-256(R6)·AES-128(R4) 처리기, 암호화 PDF 작성기 |
@@ -61,9 +62,12 @@
 2. 스풀러가 핸들을 닫으면(EOF) 수신한 바이트 전체를 하나의 작업으로 UI 스레드 큐에 넣는다.
 3. `TrayApp.ProcessJob`
    - `%PDF` 헤더 확인 (다른 드라이버가 연결된 경우 오류 알림)
-   - PDF `/Info /Title`(= 인쇄한 문서 이름)로 기본 파일명 생성 (`보고서.docx` → `보고서`)
+   - PDF `/Info /Title`(= 인쇄한 문서 이름)을 읽음
    - 설정 로드 → "창 없이 저장"이 꺼져 있거나 설정이 불완전하면 `SecurityForm` 표시
-   - `PdfEncryptor.Encrypt` → 파일 저장 → 설정 저장 → 알림 / 저장 후 열기
+     ("암호 없이 저장"을 누르면 `SkipEncryptionOnce`로 이번 작업만 암호화를 건너뜀 — 파일에 기록하지 않음)
+   - 창 없이 저장: 기본 폴더 해석 → 쓰기 확인(실패 시 문서 폴더로 대체 + 알림) → 파일 이름 형식 전개 → 중복 처리
+     ("묻기" 모드에서 같은 이름이 있으면 창 표시)
+   - `PdfEncryptor.Encrypt` → `FileNaming.WriteAtomic` → `LastFolder` 갱신·설정 저장 → 알림 / 저장 후 열기
    - 오류 시 메시지 후 설정 창으로 돌아가 재시도
 4. 작업은 큐로 직렬 처리되어 설정 창이 중첩되지 않는다.
 
@@ -120,6 +124,28 @@
 - 저장 시점: 작업 저장 성공 시, 설정 창 [확인] 시
 - 암호: "암호 기억"이 켜져 있을 때만, `ProtectedData.Protect`(DPAPI, CurrentUser 범위, 고유 엔트로피)로 암호화한 Base64로 저장. 다른 사용자/PC에서는 복호화할 수 없다.
 - 임시 파일에 쓴 뒤 교체하여 손상을 방지한다.
+- 저장 관련 키: `FolderMode`(0 마지막 폴더, 1 지정 폴더), `FixedFolder`, `LastFolder`, `FileNamePattern`, `Conflict`(0 번호, 1 덮어쓰기, 2 묻기), `StripAppName`
+- 1.0.0 호환: 예전 `OutputFolder` 값은 `LastFolder`·`FixedFolder`로 옮겨진다.
+
+## 6-1. 파일 이름·저장 폴더 규칙 (`FileNaming`)
+
+처리 순서:
+
+1. **제목 정리** (`CleanTitle`): NFC 정규화 → 제어·방향 제어·0폭 문자 제거, 공백류 하나로 →
+   프로그램 이름 제거(앞 `Microsoft Word - X`, 뒤 `X - Word`, 최대 3회 반복) → `[호환 모드]` 등 표시 제거 →
+   URL이면 마지막 경로 조각(디코딩) 또는 호스트, 전체 경로(`C:\`, `\\`, `/`)면 파일명 → 알려진 문서 확장자만 제거
+   (`file.tar.gz`, `v1.2`처럼 모르는 확장자는 유지)
+2. **형식 전개** (`Expand`): `{토큰}` / `{토큰:서식}`을 한 번만 치환한다. 제목 안의 `{…}`은 다시 전개하지 않으며,
+   알 수 없는 토큰은 그대로 둔다. 날짜 서식은 InvariantCulture, 잘못된 서식은 기본 서식으로 대체한다.
+3. **파일명 안전화** (`SanitizeFileName`): 금지 문자 → `_`(연속은 하나로), 끝의 `.pdf`·점·공백 제거,
+   150자(텍스트 요소 단위 — 서로게이트 쌍 보존)로 자름, 비거나 `_`만 남으면 `문서`, 예약 장치 이름이면 앞에 `_`.
+4. **폴더 해석** (`ResolveFolder`): 따옴표 제거 → 환경 변수 → 날짜/사용자 토큰 → `~` → 상대 경로는 문서 폴더 기준 →
+   잘못된 문자·드라이브 외 `:`는 거부 → `GetFullPath`. `EnsureWritable`이 폴더 생성과 실제 쓰기를 확인한다.
+5. **경로 결정** (`BuildPath`): 전체 경로가 259자를 넘지 않게 이름을 줄이고, 중복 규칙(번호/덮어쓰기/묻기)을 적용.
+   `{counter}`가 있으면 폴더에 없는 첫 번호를 찾는다.
+6. **저장** (`WriteAtomic`): 같은 폴더의 임시 파일에 쓴 뒤 `File.Replace`/`File.Move`. 실패해도 기존 파일은 그대로.
+
+검증: `tests/test_filenames.py` (CLI `name` 명령으로 53개 사례 확인)
 
 ## 7. 설치 구성
 

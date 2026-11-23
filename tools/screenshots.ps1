@@ -13,10 +13,13 @@ $asm = [Reflection.Assembly]::LoadFrom((Join-Path $root 'bin\GoniPdfPrinter.exe'
 $settingsType = $asm.GetType('GoniPdfPrinter.AppSettings')
 $formType = $asm.GetType('GoniPdfPrinter.SecurityForm')
 $flags = [Reflection.BindingFlags]'Instance,Public,NonPublic'
+# 캡처용 창이 포커스를 빼앗아 사용자 입력이 들어가지 않도록
+$formType.GetField('SuppressActivation', [Reflection.BindingFlags]'Static,NonPublic').SetValue($null, $true)
 
 function New-Settings([hashtable]$values) {
     $cfg = [Activator]::CreateInstance($settingsType, $true)
-    $cfg.GetType().GetField('OutputFolder').SetValue($cfg, 'C:\Users\사용자\Documents')
+    $settingsType.GetField('LastFolder').SetValue($cfg, 'C:\Users\사용자\Documents')
+    $settingsType.GetField('FixedFolder').SetValue($cfg, 'C:\Users\사용자\Documents\PDF\{yyyy}-{MM}')
     foreach ($k in $values.Keys) {
         $f = $settingsType.GetField($k)
         $v = $values[$k]
@@ -26,12 +29,14 @@ function New-Settings([hashtable]$values) {
     $cfg
 }
 
-function Save-Form($cfg, [bool]$jobMode, [string]$name, [string]$file) {
-    $form = [Activator]::CreateInstance($formType, $flags, $null, @($cfg, $jobMode, $name), $null)
+function Save-Form($cfg, [bool]$jobMode, [string]$title, [string]$file, [int]$tab = 0) {
+    $form = [Activator]::CreateInstance($formType, $flags, $null, @($cfg, $jobMode, $title), $null)
     $form.StartPosition = 'Manual'
     $form.Location = New-Object System.Drawing.Point(-4000, 0)
     $form.ShowInTaskbar = $false
     $form.Show()
+    $tabs = $form.Controls | Where-Object { $_ -is [System.Windows.Forms.TabControl] } | Select-Object -First 1
+    $tabs.SelectedIndex = $tab
     1..3 | ForEach-Object { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 100 }
     $bmp = New-Object System.Drawing.Bitmap ([int]$form.Width), ([int]$form.Height)
     $form.DrawToBitmap($bmp, (New-Object System.Drawing.Rectangle 0, 0, $form.Width, $form.Height))
@@ -42,18 +47,24 @@ function Save-Form($cfg, [bool]$jobMode, [string]$name, [string]$file) {
     Write-Host "생성: $path"
 }
 
-# 1) 첫 인쇄 시 기본 화면
-Save-Form (New-Settings @{}) $true '분기 보고서' 'dialog-default.png'
+# 1) 첫 인쇄 시 기본 화면 (보안 탭)
+Save-Form (New-Settings @{}) $true '분기 보고서.docx - Word' 'dialog-default.png'
 
-# 2) 열기 암호 + 권한 제한을 지정한 예시
+# 2) 열기 암호 + 권한 제한을 지정한 예시 (보안 탭)
 Save-Form (New-Settings @{
     RequireOpenPassword = $true; OpenPassword = 'open1234'
     RequirePermissionPassword = $true; PermissionPassword = 'owner5678'
     Print = 1; Edit = 3; AllowCopy = $false
-}) $true '계약서_최종' 'dialog-configured.png'
+}) $true '계약서_최종.hwp - 한글' 'dialog-configured.png'
 
-# 3) 트레이 메뉴의 기본 보안 설정 창
+# 3) 저장 설정 탭: 지정 폴더 + 날짜_제목 형식
+Save-Form (New-Settings @{
+    RequirePermissionPassword = $true; PermissionPassword = 'owner5678'
+    FolderMode = 1; FileNamePattern = '{date}_{title}'
+}) $true '분기 보고서.docx - Word' 'dialog-save.png' 1
+
+# 4) 트레이 메뉴의 기본 설정 창 (기타 옵션 탭)
 Save-Form (New-Settings @{
     RequirePermissionPassword = $true; PermissionPassword = 'owner5678'
     Print = 2; Edit = 2; AllowCopy = $true; SkipDialog = $true
-}) $false $null 'dialog-settings.png'
+}) $false $null 'dialog-settings.png' 2
