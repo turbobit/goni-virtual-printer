@@ -26,6 +26,8 @@ namespace GoniPdfPrinter
         {
             if (args.Length > 0 && args[0].Equals("encrypt", StringComparison.OrdinalIgnoreCase))
                 return Cli.Encrypt(args);
+            if (args.Length > 0 && args[0].Equals("name", StringComparison.OrdinalIgnoreCase))
+                return Cli.Name(args);
 
             try { SetProcessDPIAware(); } catch { }
             Application.EnableVisualStyles();
@@ -54,6 +56,62 @@ namespace GoniPdfPrinter
 
         internal static class Cli
         {
+            static void Out(string text)
+            {
+                byte[] b = System.Text.Encoding.UTF8.GetBytes(text + Environment.NewLine);
+                using (var o = Console.OpenStandardOutput()) o.Write(b, 0, b.Length);
+            }
+
+            // 파일명 규칙 확인용:
+            // GoniPdfPrinter.exe name --title T [--pattern P] [--folder F] [--now 2026-11-23T09:05:07] [--keep-app]
+            //   [--conflict number|overwrite|ask]  → 최종 경로(폴더 지정 시) 또는 파일명 출력
+            public static int Name(string[] a)
+            {
+                AttachConsole(-1);
+                try
+                {
+                    string title = null, pattern = FileNaming.DefaultPattern, folder = null;
+                    DateTime now = DateTime.Now;
+                    bool strip = true;
+                    var conflict = ConflictMode.AutoNumber;
+                    for (int i = 1; i < a.Length; i++)
+                    {
+                        switch (a[i].ToLowerInvariant())
+                        {
+                            case "--title": title = a[++i]; break;
+                            case "--pattern": pattern = a[++i]; break;
+                            case "--folder": folder = a[++i]; break;
+                            case "--now": now = DateTime.Parse(a[++i], System.Globalization.CultureInfo.InvariantCulture); break;
+                            case "--keep-app": strip = false; break;
+                            case "--conflict":
+                                string c = a[++i].ToLowerInvariant();
+                                conflict = c == "overwrite" ? ConflictMode.Overwrite : c == "ask" ? ConflictMode.Ask : ConflictMode.AutoNumber;
+                                break;
+                            default: throw new ArgumentException("알 수 없는 옵션: " + a[i]);
+                        }
+                    }
+                    if (folder == null)
+                    {
+                        Out(FileNaming.Expand(pattern, title, now, strip, 1) + ".pdf");
+                        return 0;
+                    }
+                    string resolved = FileNaming.ResolveFolder(folder, now);
+                    if (resolved == null) { Out("INVALID_FOLDER"); return 2; }
+                    string name = FileNaming.HasCounter(pattern)
+                        ? FileNaming.ExpandWithCounter(resolved, pattern, title, now, strip)
+                        : FileNaming.Expand(pattern, title, now, strip, 1);
+                    bool exists;
+                    string path = FileNaming.BuildPath(resolved, name, conflict, out exists);
+                    Out((exists ? "EXISTS " : "") + path);
+                    return 0;
+                }
+                catch (Exception ex)
+                {
+                    Out("ERROR " + ex.Message);
+                    return 1;
+                }
+            }
+
             // GoniPdfPrinter.exe encrypt <입력.pdf> <출력.pdf> [--open 암호] [--owner 암호]
             //   [--print none|low|high] [--edit 0-4] [--copy] [--no-access] [--aes128] [--no-meta]
             public static int Encrypt(string[] a)
@@ -164,9 +222,9 @@ namespace GoniPdfPrinter
 
             string title = null;
             try { title = new PdfDocument(pdf).GetTitle(); } catch { }
-            string baseName = FileNames.FromTitle(title);
 
             var settings = AppSettings.Load();
+            DateTime now = DateTime.Now;
             string path = null;
             bool showDialog = settings.SkipDialog == false || settings.ToSecurityOptions().Validate() != null
                               || (settings.RequireOpenPassword && settings.OpenPassword.Length == 0);
@@ -175,7 +233,7 @@ namespace GoniPdfPrinter
             {
                 if (showDialog)
                 {
-                    using (var f = new SecurityForm(settings, true, baseName))
+                    using (var f = new SecurityForm(settings, true, title))
                     {
                         if (f.ShowDialog() != DialogResult.OK) return null;
                         settings = f.Result;
@@ -184,24 +242,27 @@ namespace GoniPdfPrinter
                 }
                 else
                 {
-                    Directory.CreateDirectory(settings.OutputFolder);
-                    path = FileNames.Unique(settings.OutputFolder, baseName);
+                    path = AutoPath(settings, title, now, tray);
+                    if (path == null) { showDialog = true; continue; }
                 }
 
                 try
                 {
                     byte[] output = PdfEncryptor.Encrypt(pdf, settings.ToSecurityOptions());
-                    File.WriteAllBytes(path, output);
+                    FileNaming.WriteAtomic(path, output);
                     break;
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show("PDF 저장 중 오류가 발생했습니다.\n\n" + ex.Message, "Goni PDF",
+                    string nl = Environment.NewLine;
+                    MessageBox.Show("PDF 저장 중 오류가 발생했습니다." + nl + nl + path + nl + nl + ex.Message, "Goni PDF",
                         MessageBoxButtons.OK, MessageBoxIcon.Error);
                     showDialog = true; // 다시 설정 창으로
                 }
             }
 
+            settings.SkipEncryptionOnce = false;
+            settings.LastFolder = Path.GetDirectoryName(path);
             try { settings.Save(); } catch { }
 
             Notify(tray, "저장했습니다: " + path, false);
@@ -210,6 +271,27 @@ namespace GoniPdfPrinter
                 try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); } catch { }
             }
             return path;
+        }
+
+        /// <summary>창 없이 저장할 경로. 사용자 확인이 필요하면 null.</summary>
+        static string AutoPath(AppSettings settings, string title, DateTime now, NotifyIcon tray)
+        {
+            string folder = settings.ResolveDefaultFolder(now);
+            string err = FileNaming.EnsureWritable(folder);
+            if (err != null)
+            {
+                // 기본 폴더(예: 분리된 USB/네트워크 드라이브)를 쓸 수 없으면 문서 폴더로
+                string fallback = FileNaming.DefaultFolder;
+                if (FileNaming.EnsureWritable(fallback) != null) return null;
+                Notify(tray, "저장 폴더를 사용할 수 없어 문서 폴더에 저장합니다." + Environment.NewLine + folder + " - " + err, true);
+                folder = fallback;
+            }
+            string name = FileNaming.HasCounter(settings.FileNamePattern)
+                ? FileNaming.ExpandWithCounter(folder, settings.FileNamePattern, title, now, settings.StripAppName)
+                : FileNaming.Expand(settings.FileNamePattern, title, now, settings.StripAppName, 1);
+            bool exists;
+            string path = FileNaming.BuildPath(folder, name, settings.Conflict, out exists);
+            return exists ? null : path; // "묻기" 모드에서 같은 이름이 있으면 창을 띄움
         }
 
         static void Notify(NotifyIcon tray, string msg, bool error)
@@ -240,7 +322,9 @@ namespace GoniPdfPrinter
 
         static void OpenFolder()
         {
-            string folder = AppSettings.Load().OutputFolder;
+            var s = AppSettings.Load();
+            string folder = FileNaming.ResolveFolder(s.LastFolder, DateTime.Now);
+            if (folder == null || !Directory.Exists(folder)) folder = s.ResolveDefaultFolder(DateTime.Now);
             if (Directory.Exists(folder)) Process.Start("explorer.exe", "\"" + folder + "\"");
         }
 

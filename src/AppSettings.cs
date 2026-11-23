@@ -25,7 +25,22 @@ namespace GoniPdfPrinter
         public bool RememberPasswords = true;
         public bool OpenAfterSave = true;
         public bool SkipDialog = false;
-        public string OutputFolder = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        public bool SkipEncryptionOnce = false; // [암호 없이 저장] - 이번 작업에만 적용, 파일에 기록하지 않음
+
+        // 저장 위치 / 파일 이름
+        public FolderMode FolderMode = FolderMode.LastUsed;
+        public string FixedFolder = FileNaming.DefaultFolder;
+        public string LastFolder = FileNaming.DefaultFolder;
+        public string FileNamePattern = FileNaming.DefaultPattern;
+        public ConflictMode Conflict = ConflictMode.AutoNumber;
+        public bool StripAppName = true;
+
+        /// <summary>기본 저장 폴더(해석된 실제 경로). 해석 실패 시 문서 폴더.</summary>
+        public string ResolveDefaultFolder(DateTime now)
+        {
+            string raw = FolderMode == FolderMode.Fixed ? FixedFolder : LastFolder;
+            return FileNaming.ResolveFolder(raw, now) ?? FileNaming.DefaultFolder;
+        }
 
         public static string Dir
         {
@@ -36,6 +51,7 @@ namespace GoniPdfPrinter
 
         public SecurityOptions ToSecurityOptions()
         {
+            if (SkipEncryptionOnce) return new SecurityOptions();
             return new SecurityOptions
             {
                 OpenPassword = RequireOpenPassword ? OpenPassword : "",
@@ -79,8 +95,15 @@ namespace GoniPdfPrinter
                 s.RememberPasswords = GetBool(map, "RememberPasswords", s.RememberPasswords);
                 s.OpenAfterSave = GetBool(map, "OpenAfterSave", s.OpenAfterSave);
                 s.SkipDialog = GetBool(map, "SkipDialog", s.SkipDialog);
-                string folder;
-                if (map.TryGetValue("OutputFolder", out folder) && folder.Length > 0) s.OutputFolder = folder;
+                string v;
+                // 1.0.0 호환: OutputFolder → 마지막/지정 폴더
+                if (map.TryGetValue("OutputFolder", out v) && v.Trim().Length > 0) s.LastFolder = s.FixedFolder = v.Trim();
+                s.FolderMode = (FolderMode)GetInt(map, "FolderMode", (int)s.FolderMode, 0, 1);
+                if (map.TryGetValue("FixedFolder", out v) && v.Trim().Length > 0) s.FixedFolder = v.Trim();
+                if (map.TryGetValue("LastFolder", out v) && v.Trim().Length > 0) s.LastFolder = v.Trim();
+                if (map.TryGetValue("FileNamePattern", out v) && v.Trim().Length > 0) s.FileNamePattern = v.Trim();
+                s.Conflict = (ConflictMode)GetInt(map, "Conflict", (int)s.Conflict, 0, 2);
+                s.StripAppName = GetBool(map, "StripAppName", s.StripAppName);
                 if (s.RememberPasswords)
                 {
                     s.OpenPassword = Unprotect(map, "OpenPassword");
@@ -107,7 +130,12 @@ namespace GoniPdfPrinter
             Add(sb, "RememberPasswords", RememberPasswords);
             Add(sb, "OpenAfterSave", OpenAfterSave);
             Add(sb, "SkipDialog", SkipDialog);
-            sb.AppendLine("OutputFolder=" + OutputFolder);
+            sb.AppendLine("FolderMode=" + (int)FolderMode);
+            sb.AppendLine("FixedFolder=" + OneLine(FixedFolder));
+            sb.AppendLine("LastFolder=" + OneLine(LastFolder));
+            sb.AppendLine("FileNamePattern=" + OneLine(FileNamePattern));
+            sb.AppendLine("Conflict=" + (int)Conflict);
+            Add(sb, "StripAppName", StripAppName);
             if (RememberPasswords)
             {
                 sb.AppendLine("OpenPassword=" + Protect(OpenPassword));
@@ -118,6 +146,15 @@ namespace GoniPdfPrinter
             if (File.Exists(FilePath)) File.Delete(FilePath);
             File.Move(tmp, FilePath);
         }
+
+        static readonly char[] LineBreaks = { (char)13, (char)10 };
+
+        static string OneLine(string v)
+        {
+            foreach (char c in LineBreaks) v = (v ?? "").Replace(c, ' ');
+            return (v ?? "").Trim();
+        }
+
 
         static void Add(StringBuilder sb, string k, bool v) { sb.AppendLine(k + "=" + (v ? "1" : "0")); }
 
