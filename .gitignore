@@ -1,0 +1,16 @@
+# 빌드 결과 (build.ps1로 생성)
+bin/
+obj/
+*.tmp
+
+# Python
+__pycache__/
+*.pyc
+
+# 편집기/OS
+.vs/
+.vscode/
+*.suo
+*.user
+Thumbs.db
+desktop.ini
